@@ -238,7 +238,7 @@ Run all unit tests:
 python -m pytest tests/ -v
 ```
 
-The current test suite contains 14 passing tests covering:
+The test suite covers:
 - API pagination, retries, and rate limiting
 - Stock universe configuration
 - EOD and ticker retrieval
@@ -246,6 +246,8 @@ The current test suite contains 14 passing tests covering:
 - Skipping existing files
 - Incremental ingestion
 - Incremental CLI argument handling
+- Raw JSON parsing and file discovery
+- Exchange, EOD price, and dividend database mappings
 
 Tests use mocked responses and do not consume API credits.
 
@@ -256,10 +258,10 @@ Initial EOD and ticker ingestion were also verified using live Marketstack reque
 - API access and historical coverage depend on the Marketstack subscription plan.
 - Existing files are skipped; the pipeline does not automatically repair incomplete files.
 - Incremental ingestion uses the latest saved date and does not detect historical gaps.
-- Raw data is not cleaned, normalized, or loaded into a database by this component.
+- Raw data is normalized and loaded into PostgreSQL by `src/db.py`.
 - Exchange, dividend, and split attributes may appear in the retrieved records, but separate ingestion pipelines for those endpoints are not included.
 
-Next steps include downstream schema design, data transformation, sector standardization, missing-value handling, and EDA.
+Next steps include Airflow orchestration, sector standardization, and EDA.
 
 ## 10. Data Handoff
 
@@ -268,3 +270,49 @@ The repository contains the ingestion code, dependencies, and tests.
 The 50 initial raw JSON files are stored locally and are not included in GitHub. Team members requiring these files should obtain the dataset separately.
 
 Downstream processing should preserve source records, distinguish SPY from individual stocks, and document any transformations applied.
+
+## 11. PostgreSQL Database
+
+The database layer uses PostgreSQL 16 in Docker. Its normalized schema is
+defined in `sql/schema.sql` and contains four tables:
+
+- `exchanges`: exchange reference data, unique by MIC
+- `tickers`: security metadata, unique by symbol
+- `eod_prices`: daily OHLCV data, unique by ticker and date
+- `dividends`: positive dividend events derived from EOD data
+
+Copy the environment template and start PostgreSQL:
+
+```bash
+cp .env.example .env
+docker compose up -d
+docker compose ps
+```
+
+The schema is applied automatically when the PostgreSQL volume is created for
+the first time. Install Python dependencies and load the raw JSON data:
+
+```bash
+python -m pip install -r requirements.txt
+python -m src.db
+```
+
+The loader is idempotent: rerunning it updates existing rows through PostgreSQL
+upserts instead of creating duplicates. For the initial dataset, the expected
+quality-check results are:
+
+| Check | Expected result |
+|---|---:|
+| Exchanges | 3 |
+| Tickers | 25 |
+| EOD prices | 5,575 |
+| Dividends | 87 |
+| Missing `close` | 70 |
+| Missing `adj_close` | 70 |
+| Duplicate ticker/date keys | 0 |
+
+Stop the database without deleting its persistent volume:
+
+```bash
+docker compose down
+```
