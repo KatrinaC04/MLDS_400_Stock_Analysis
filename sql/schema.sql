@@ -72,3 +72,16 @@ CREATE INDEX IF NOT EXISTS
 
 CREATE INDEX IF NOT EXISTS
     idx_dividends_dividend_date ON dividends(dividend_date);
+
+CREATE TABLE IF NOT EXISTS pipeline_runs (
+    id BIGSERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    status TEXT,
+    started_at TIMESTAMPTZ,
+    ended_at TIMESTAMPTZ,
+    duration_sec NUMERIC(12, 3),
+    rows_loaded BIGINT,
+    api_credits_used INT NOT NULL DEFAULT 0,
+    logged_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

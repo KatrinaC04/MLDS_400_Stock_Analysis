@@ -316,3 +316,55 @@ Stop the database without deleting its persistent volume:
 ```bash
 docker compose down
 ```
+
+## 12. Airflow Orchestration
+
+The DAG `marketstack_pipeline` (in `dags/`) orchestrates the full flow:
+`branch_ingest -> (credit_guard -> ingest_incremental | skip_ingest) -> load_tickers -> load_eod -> quality_checks -> log_run_metrics`
+
+It reuses the existing functions: `ingest_eod_incremental` from `src/ingest.py` and `load_tickers`, `load_eod_data`, `run_quality_checks` from `src/db.py`.
+
+### Prerequisites
+
+1. Docker Desktop is running.
+2. Raw data is placed at `data/raw/eod/` and `data/raw/tickers/` (25 files each; not tracked by Git, obtain it from Part A).
+3. `cp .env.example .env`. Add `MARKETSTACK_API_KEY=...` only if you want to call the API.
+4. If port 5432 is already in use on your machine, set `POSTGRES_PORT=5433` in `.env`. The Airflow container is not affected, it connects to PostgreSQL internally.
+
+### Start
+
+```bash
+docker compose up -d --build
+```
+
+Open http://localhost:8080 (username `admin`, password `admin`), then click Trigger DAG w/ config on `marketstack_pipeline`. The first run takes a few minutes because the Airflow image has to be built.
+
+### DAG parameters
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `run_ingest` | false | If true, calls the Marketstack API (uses credits). If false, only loads existing raw JSON into PostgreSQL (0 credits). |
+| `symbols` | AAPL, JPM, XOM, SPY | Symbols for incremental ingestion (1 credit per symbol). |
+| `date_to` | empty | Incremental end date (YYYY-MM-DD). Empty means the run date. Weekend dates are skipped. |
+
+The first run with `run_ingest = false` performs the initial database load. Re-running it does not create duplicates.
+
+### Free-tier credit protection
+
+The free plan allows 100 credits per month and each symbol in a request costs 1 credit. `credit_guard` blocks a run if estimated monthly usage would exceed 90 credits (the initial ingestion is counted as 50). The DAG is manual-trigger only (`schedule=None`) so that it cannot silently use up the quota.
+
+### Pipeline metrics
+
+Every run writes per-task status, duration, rows loaded and credits used to the `pipeline_runs` table, plus an end-to-end total row (`__pipeline_total__`):
+
+```bash
+docker compose exec postgres psql -U stock_user -d stock_analysis -c "SELECT task_id, status, duration_sec, rows_loaded, api_credits_used FROM pipeline_runs ORDER BY id;"
+```
+
+### Data quality in the DAG
+
+`quality_checks` reuses `run_quality_checks` and fails on an empty `eod_prices` table, duplicate (ticker, date) keys, or a missing-`close` ratio above 2%. The 70 known missing `close` / `adj_close` records (see Section 7) are tolerated; a warning is logged if the count grows beyond 70.
+
+### Status
+
+The initial load through the DAG was verified: 25 tickers, 5,575 EOD prices and 70 missing `close`, matching the expected results in Section 11. The live incremental path (`run_ingest = true`) is implemented but has not yet been tested against the API.

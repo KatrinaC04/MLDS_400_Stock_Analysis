@@ -3,7 +3,7 @@ services:
     image: postgres:16-alpine
     container_name: stock-analysis-postgres
 
-    environment: 
+    environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -14,14 +14,45 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./sql/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
-    
+
     healthcheck:
       test:
-      - CMD-SHELL
-      - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
       interval: 5s
       timeout: 5s
       retries: 10
 
+  airflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
+    container_name: stock-analysis-airflow
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      PYTHONPATH: /opt/airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/db/airflow.db
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
+      - airflow_db:/opt/airflow/db
+    command: >
+      bash -c "airflow db migrate
+      && (airflow users create --username admin --password admin
+      --firstname Admin --lastname User --role Admin --email admin@example.com || true)
+      && (airflow scheduler &)
+      && exec airflow webserver"
+
 volumes:
   postgres_data:
+  airflow_db:
